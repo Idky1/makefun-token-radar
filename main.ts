@@ -39,7 +39,7 @@ if (!existsSync(inputFile)) {
 const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-const { board, radar, derived } = buildRadar(snapshot);
+const { board, radar, value, odds, accounting } = buildRadar(snapshot);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
@@ -83,6 +83,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-    `token radar: derived global multiple ${derived.global_multiple} from ${derived.tokenized_protocols} tokenized protocols; ${derived.categories.length} category multiples\n` +
+    `token radar: size curve log10(mcap) = ${value.fit.intercept} + ${value.fit.slope} x log10(tvl) (R2 ${value.fit.r2}, n=${value.fit.n}); flat median ${value.flat_median}; LOO x${value.terms[1]!.loo} WF x${value.terms[1]!.wf}\n` +
+    `token radar: token odds age-only (Brier LOO ${odds.brier_loo} WF ${odds.brier_wf} vs base ${odds.base_brier_loo}); farm ${radar.farm.farm} marginal ${radar.farm.marginal} skip ${radar.farm.skip}; accounting ${accounting.total} = ${accounting.ranked_watchlist + accounting.ranked_early} ranked + ${accounting.token_priced + accounting.token_no_cap} token + ${accounting.out_category + accounting.out_versioned + accounting.out_wrapped + accounting.out_exchange + accounting.out_other} left out\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
