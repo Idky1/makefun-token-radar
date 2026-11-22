@@ -9,6 +9,7 @@
 <body>
 <header class="top">
   <div class="wrap">
+    <span class="brand-float">Powered by make.fun zkdecky</span>
     <h1>Token Radar <span class="ver" id="modelVersion"></span></h1>
     <p class="sub" id="headline"></p>
     <p class="src" id="sourceLine"></p>
@@ -21,29 +22,28 @@
 </header>
 <main class="wrap">
   <section id="boardView">
-    <div id="kpis" class="kpis"></div>
+    <p class="verdict-row" id="verdictRow"></p>
+    <p class="kpis-compact" id="kpisCompact"></p>
     <p class="formula" id="formulaBar"></p>
     <div class="accounting" id="accounting"></div>
-    <p class="verify" id="verifyStrip"></p>
     <div class="evidence" id="evidence"></div>
     <section class="controls" id="controls">
       <div class="verdict-tabs" id="verdictTabs" role="group" aria-label="Filter by farm verdict"></div>
       <select id="tier" aria-label="Filter by tier">
         <option value="">All tiers</option>
         <option value="watchlist">Watchlist</option>
-        <option value="early">Early (below the floor)</option>
+        <option value="early">Early</option>
       </select>
       <select id="cat" aria-label="Filter by category"></select>
       <select id="chain" aria-label="Filter by chain"></select>
-      <input id="q" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
+      <input id="q" type="search" placeholder="Search…" aria-label="Search protocols">
       <select id="sort" aria-label="Sort board">
-        <option value="rank">Sort: rank</option>
-        <option value="implied">Sort: implied value</option>
-        <option value="tvl">Sort: TVL</option>
-        <option value="odds">Sort: token odds</option>
-        <option value="net">Sort: net of fees</option>
+        <option value="rank">Rank</option>
+        <option value="implied">Implied</option>
+        <option value="tvl">TVL</option>
+        <option value="odds">Token odds</option>
+        <option value="net" selected>Net of fees</option>
       </select>
-      <span id="count" class="count"></span>
     </section>
     <section class="sliders" id="sliders">
       <label>Plan size <input id="planSize" type="range" min="0.005" max="0.1" step="0.005" value="0.02"> <span id="planSizeVal"></span> of TVL</label>
@@ -51,7 +51,6 @@
       <label>Horizon <input id="horizon" type="range" min="4" max="52" step="2" value="12"> <span id="horizonVal"></span></label>
       <button id="csvBtn" type="button">CSV</button>
       <button id="jsonBtn" type="button">JSON</button>
-      <span class="slidenote" id="slideNote"></span>
     </section>
     <table id="board">
       <thead><tr>
@@ -88,6 +87,7 @@
     <p class="note">Nothing here is a prediction that a token will launch, or when. The implied value is what the token would be worth if the protocol's record stayed as it is — priced the way the market already prices tokens that trade, and weighted by how often protocols of that age record a token.</p>
   </section>
   <footer class="foot">
+    <p class="brand">Powered by make.fun zkdecky</p>
     <p>Snapshot 2026-11-14 · 758 protocols · floor $50,000,000 · “records no token” means the snapshot records none — a protocol on this board may still have a token its record does not carry.</p>
   </footer>
 </main>

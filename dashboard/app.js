@@ -1,9 +1,11 @@
-// Token Radar v2 dashboard: board, live tokens and the model, from window.RADAR (data.js).
-// No network, no framework. The evidence is on the board page itself: the KPI strip, the
-// protocol accounting with its verification line, and the out-of-sample tables. The farm
+// Token Radar v3 dashboard: board, live tokens and the model, from window.RADAR (data.js).
+// No network, no framework. v3 is presentation-only on top of the v2 model and data:
+// the verdict row answers "what should I farm?" first, the evidence is compressed to a
+// strip (full tables live in "The model" tab), the board defaults to net-of-fees order, and
+// every row carries its one-line "why this rank" (TVL x multiple x odds). The farm
 // sliders recompute every row's verdict, net and net/hour live, with the same arithmetic the
 // model used. Hash routes: #/detail/<slug> opens one protocol, #/filter/<category> opens the
-// board filtered to that category.
+// board filtered to that category, #/verdict/<FARM|MARGINAL|SKIP> opens that tab.
 
 (function () {
   'use strict';
@@ -58,75 +60,48 @@
   // ---- header ----
   $('modelVersion').textContent = D.model_version;
   $('headline').textContent = D.board_size + ' pre-token protocols ranked by implied value · ' +
-    D.watchlist_size + ' on the watchlist · ' + D.early_size + ' found below the floor · ' +
-    D.live_size + ' live tokens set aside · snapshot ' + D.as_of;
+    D.watchlist_size + ' on the watchlist · snapshot ' + D.as_of;
   $('sourceLine').textContent = 'Source: ' + D.source.replace(/^DefiLlama /, 'DefiLlama — ') + ' · floor ' + money(D.floor_usd);
 
-  // ---- KPI strip ----
+  // ---- verdict row + compact KPI strip (v3: the verdict is the biggest line; the 6 cards are one muted line) ----
   var V = D.value, O = D.odds, A = D.accounting;
   var keptValue = V.terms.filter(function (t) { return t.kept; }).map(function (t) { return t.label.replace(/^\+ /, ''); }).join(', ') || 'flat median';
   var keptOdds = O.terms.filter(function (t) { return t.kept; }).map(function (t) { return t.label.replace(/^\+ /, ''); }).join(', ') || 'base rate';
-  $('kpis').innerHTML =
-    '<div class="kpi"><div class="big">×' + V.terms[1].wf.toFixed(2) + ' <span class="vs">vs ×' + V.terms[0].wf.toFixed(2) + ' flat</span></div><div class="lbl">walk-forward miss · LOO ×' + V.terms[1].loo.toFixed(2) + '</div></div>' +
-    '<div class="kpi"><div class="big">' + Math.round(V.ranges.loo_in_p25_p75 * 100) + '% / ' + Math.round(V.ranges.loo_in_p10_p90 * 100) + '%</div><div class="lbl">range honesty · stated 50% / 80%</div></div>' +
-    '<div class="kpi"><div class="big">' + O.brier_loo.toFixed(3) + ' <span class="vs">vs ' + O.base_brier_loo.toFixed(3) + ' base</span></div><div class="lbl">token-odds Brier · WF ' + O.brier_wf.toFixed(3) + '</div></div>' +
-    '<div class="kpi"><div class="big">1 of 6 · 1 of 4</div><div class="lbl">terms survived · value: ' + esc(keptValue) + ' · odds: ' + esc(keptOdds) + '</div></div>' +
-    '<div class="kpi"><div class="big">' + D.farm.farm + ' of ' + D.board_size + '</div><div class="lbl">worth farming · ' + D.farm.marginal + ' marginal · ' + D.farm.skip + ' skip</div></div>' +
-    '<div class="kpi"><div class="big">' + A.ranked_watchlist + ' / ' + D.watchlist_size + '</div><div class="lbl">watchlist covered · ' + D.board_size + ' ranked</div></div>';
+  function renderVerdictRow() {
+    var best = null;
+    rows.forEach(function (r) {
+      var e = farmEcon(r.tvl_usd, r.implied_value_usd, state.planShare, state.dropShare, state.horizon);
+      if (e.verdict === 'FARM' && (best === null || e.netPerHour > best.netPerHour)) best = e;
+    });
+    var total = rows.reduce(function (a, r) { return a + r.implied_value_usd; }, 0);
+    var bestTxt = best === null ? 'no farm pays yet' : 'best net +$' + best.net.toFixed(2) + ' (+$' + best.netPerHour.toFixed(2) + '/h)';
+    $('verdictRow').innerHTML = '<span class="sparkle">✦</span><span class="good">Farm ' + D.farm.farm + ' of ' + D.board_size + '</span> · ' + bestTxt + ' · <span class="acc">' + money(total) + '</span> implied';
+  }
+  $('kpisCompact').innerHTML =
+    'Walk-forward miss <b>×' + V.terms[1].wf.toFixed(2) + '</b> (LOO ×' + V.terms[1].loo.toFixed(2) + ') · ' +
+    'range honesty <b>' + Math.round(V.ranges.loo_in_p25_p75 * 100) + '% / ' + Math.round(V.ranges.loo_in_p10_p90 * 100) + '%</b> · ' +
+    'odds Brier <b>' + O.brier_loo.toFixed(3) + '</b> (base ' + O.base_brier_loo.toFixed(3) + ') · ' +
+    'value: <b>' + esc(keptValue) + '</b> · odds: <b>' + esc(keptOdds) + '</b> · ' +
+    'watchlist <b>' + A.ranked_watchlist + '/' + D.watchlist_size + '</b>';
 
-  // ---- formula bar, accounting, verification ----
+  // ---- formula bar, accounting + verification on one line ----
   $('formulaBar').innerHTML = 'implied = <b>TVL × fitted multiple × token odds</b> · log10(mcap) = <b>' + V.fit.intercept + ' + ' + V.fit.slope + ' × log10(TVL)</b> · odds = logistic(age)';
-  $('accounting').innerHTML = '<b>Protocol accounting — all ' + A.total + ' snapshot protocols in exactly one group:</b> ' +
+  $('accounting').innerHTML = '<b>Protocol accounting — all ' + A.total + ' in exactly one group:</b> ' +
     '<b>' + (A.ranked_watchlist + A.ranked_early) + ' ranked</b> (' + A.ranked_watchlist + ' watchlist + ' + A.ranked_early + ' early) · ' +
     '<b>' + (A.token_priced + A.token_no_cap) + ' already record a token</b> · ' +
-    '<b>' + (A.out_category + A.out_versioned + A.out_wrapped + A.out_exchange + A.out_other) + ' left out</b>';
-  $('verifyStrip').textContent = '✓ table = board.json · ' + D.board_size + '/' + D.board_size + ' rows recomputed · ranks 1–' + D.board_size + ' in order · totals equal ' + moneyFull(rows.reduce(function (a, r) { return a + r.implied_value_usd; }, 0)) + ' · watchlist ' + A.ranked_watchlist + '/' + D.watchlist_size + ' · ledger ' + A.total + '/' + A.total;
+    '<b>' + (A.out_category + A.out_versioned + A.out_wrapped + A.out_exchange + A.out_other) + ' left out</b> · ' +
+    '<span class="verify-inline">✓ board.json verified: ' + D.board_size + '/' + D.board_size + ' rows · ranks in order · ' + moneyFull(rows.reduce(function (a, r) { return a + r.implied_value_usd; }, 0)) + ' total · watchlist ' + A.ranked_watchlist + '/' + D.watchlist_size + '</span>';
 
-  // ---- evidence tables ----
+  // ---- evidence strip (v3: kept rows only, one short panel each; the full tables live in "The model" tab) ----
   function termTag(t) {
     if (t.kept) return '<span class="tag kept">kept</span>';
     if (t.label.indexOf('control') >= 0 || t.label.indexOf('placebo') >= 0) return '<span class="tag placebo">placebo</span>';
     return '<span class="tag tested">tested</span>';
   }
-  function valueTable(includeShrunk, includeNote) {
-    var h = '<table><thead><tr><th>Value model — typical miss</th><th class="num">LOO</th><th class="num">WF</th><th></th></tr></thead><tbody>';
-    h += V.terms.map(function (t) {
-      return '<tr><td>' + esc(t.label) + '</td><td class="num">×' + t.loo.toFixed(2) + '</td><td class="num">×' + t.wf.toFixed(2) + '</td><td>' + termTag(t) + '</td></tr>';
-    }).join('');
-    if (includeShrunk) {
-      h += V.shrunk_category.map(function (s) {
-        return '<tr><td>category, shrunk k=' + s.shrink + '</td><td class="num">×' + s.loo.toFixed(2) + '</td><td class="num">×' + s.wf.toFixed(2) + '</td><td><span class="tag tested">tested</span></td></tr>';
-      }).join('');
-    }
-    h += '</tbody></table>';
-    if (includeNote) h += '<p class="foot-note">kept = lowers both the leave-one-out and the walk-forward miss · tested = tried and dropped · placebo = a control that must not help. Only the size curve is kept.</p>';
-    return h;
-  }
-  function oddsTable(includeNote) {
-    var h = '<table><thead><tr><th>Token odds — Brier</th><th class="num">LOO</th><th class="num">WF</th><th></th></tr></thead><tbody>';
-    h += O.terms.map(function (t) {
-      return '<tr><td>' + esc(t.label) + '</td><td class="num">' + t.loo.toFixed(3) + '</td><td class="num">' + t.wf.toFixed(3) + '</td><td>' + termTag(t) + '</td></tr>';
-    }).join('');
-    h += '<tr><td>+ control (placebo)</td><td class="num">' + O.placebo_loo.toFixed(3) + '</td><td class="num">' + O.placebo_wf.toFixed(3) + '</td><td><span class="tag placebo">placebo</span></td></tr>';
-    h += '</tbody></table>';
-    if (includeNote) h += '<p class="foot-note">' + O.peers + ' peers with a listing date · ' + O.recorded + ' recorded a token (' + Math.round(O.base_rate * 100) + '% base rate). The placebo shuffles growth across peers; it does not beat the real model.</p>';
-    return h;
-  }
-  function rangeTable(includeNote) {
-    var h = '<table><thead><tr><th>Range honesty</th><th class="num">LOO</th><th class="num">WF</th></tr></thead><tbody>';
-    h += '<tr><td>inside P25–P75 (stated 50%)</td><td class="num">' + Math.round(V.ranges.loo_in_p25_p75 * 100) + '%</td><td class="num">' + Math.round(V.ranges.wf_in_p25_p75 * 100) + '%</td></tr>';
-    h += '<tr><td>inside P10–P90 (stated 80%)</td><td class="num">' + Math.round(V.ranges.loo_in_p10_p90 * 100) + '%</td><td class="num">' + Math.round(V.ranges.wf_in_p10_p90 * 100) + '%</td></tr>';
-    h += '<tr><td>within ×3 of the model</td><td class="num">' + Math.round(V.ranges.within_x3_loo * 100) + '%</td><td class="num">' + Math.round(V.ranges.within_x3_wf * 100) + '%</td></tr>';
-    h += '<tr><td>range, P25–P75</td><td class="num" colspan="2">×' + V.ranges.p25.toFixed(2) + ' – ×' + V.ranges.p75.toFixed(2) + '</td></tr>';
-    h += '<tr><td>range, P10–P90</td><td class="num" colspan="2">×' + V.ranges.p10.toFixed(2) + ' – ×' + V.ranges.p90.toFixed(2) + '</td></tr>';
-    h += '</tbody></table>';
-    if (includeNote) h += '<p class="foot-note">Bootstrap, ' + V.bootstrap.refits + ' refits: intercept ' + V.fit.intercept + ' ± ' + V.bootstrap.intercept_se + ' · slope ' + V.fit.slope + ' ± ' + V.bootstrap.slope_se + ' · multiple at $100M TVL ' + V.bootstrap.multiple_100m.toFixed(3) + '× ± ' + V.bootstrap.multiple_100m_se.toFixed(3) + '.</p>';
-    return h;
-  }
   $('evidence').innerHTML =
-    '<div><h3>Out-of-sample evidence · value model</h3>' + valueTable(false, false) + '</div>' +
-    '<div><h3>Out-of-sample evidence · token odds</h3>' + oddsTable(false) + '</div>' +
-    '<div class="range-ev"><h3>Out-of-sample evidence · ranges</h3>' + rangeTable(false) + '</div>';
+    '<div class="ev-mini"><b>Value —</b> kept <b>size curve</b>: LOO ×' + V.terms[1].loo.toFixed(2) + ' · WF ×' + V.terms[1].wf.toFixed(2) + ' · flat ×' + V.terms[0].loo.toFixed(2) + ' / ×' + V.terms[0].wf.toFixed(2) + '.</div>' +
+    '<div class="ev-mini"><b>Odds —</b> kept <b>age only</b>: Brier ' + O.brier_loo.toFixed(3) + ' / ' + O.brier_wf.toFixed(3) + ' vs base ' + O.base_brier_loo.toFixed(3) + ' / ' + O.base_brier_wf.toFixed(3) + ' · placebo ' + O.placebo_loo.toFixed(3) + ' / ' + O.placebo_wf.toFixed(3) + '.</div>' +
+    '<div class="ev-mini"><b>Ranges —</b> P25–P75 holds <b>' + Math.round(V.ranges.loo_in_p25_p75 * 100) + '% / ' + Math.round(V.ranges.wf_in_p25_p75 * 100) + '%</b> (stated 50%) · P10–P90 holds <b>' + Math.round(V.ranges.loo_in_p10_p90 * 100) + '% / ' + Math.round(V.ranges.wf_in_p10_p90 * 100) + '%</b> (stated 80%).</div>';
 
   // ---- filter options ----
   var cats = {}, chains = {};
@@ -142,8 +117,8 @@
   fillSelect($('cat'), Object.keys(cats), 'All categories');
   fillSelect($('chain'), Object.keys(chains), 'All chains');
 
-  // ---- state ----
-  var state = { view: 'board', verdict: '', tier: '', q: '', cat: '', chain: '', sort: 'rank', planShare: 0.0002, dropShare: 0.07, horizon: 12 };
+  // ---- state (v3: the board opens sorted by net of fees, so the farmable rows come first) ----
+  var state = { view: 'board', verdict: '', tier: '', q: '', cat: '', chain: '', sort: 'net', planShare: 0.0002, dropShare: 0.07, horizon: 12 };
 
   function econ(r) { return farmEcon(r.tvl_usd, r.implied_value_usd, state.planShare, state.dropShare, state.horizon); }
 
@@ -195,24 +170,32 @@
 
   function renderBoard() {
     renderVerdictTabs();
+    renderVerdictRow();
     var list = filtered();
     var tvlSum = list.reduce(function (a, r) { return a + r.tvl_usd; }, 0);
     var impSum = list.reduce(function (a, r) { return a + r.implied_value_usd; }, 0);
-    $('count').textContent = list.length + ' of ' + rows.length + ' rows · ' + money(tvlSum) + ' TVL · ' + money(impSum) + ' implied';
     $('rows').innerHTML = list.map(function (r) {
       var e = econ(r);
       var oddsPct = Math.round(r.token_odds * 100);
-      return '<tr data-slug="' + esc(r.slug) + '">' +
+      // odds bands: grey under 40%, amber 40-70%, green over 70% (the % figure is the second cue)
+      var band = oddsPct < 40 ? 'odds-low' : oddsPct > 70 ? 'odds-high' : 'odds-mid';
+      // one-line "why this rank": the three inputs that make the implied value
+      // (the slug stays in the row tooltip; the visible line is kept short so the
+      // table fits the 1024px viewport without cutting the net column)
+      var why = 'TVL ' + money(r.tvl_usd) + ' × ' + r.size_multiple.toFixed(3) + '× · ' + oddsPct + '% odds';
+      var whyFull = r.slug + ' · ' + why + ' = if it launches ' + money(r.if_launch_usd) + ' × ' + oddsPct + '% = ' + money(r.implied_value_usd) + ' implied (P25–P75 ' + money(r.implied_p25_usd) + ' – ' + money(r.implied_p75_usd) + ')';
+      return '<tr data-slug="' + esc(r.slug) + '" title="' + esc(whyFull) + '">' +
         '<td class="num">' + r.rank + '</td>' +
-        '<td><span class="name">' + esc(r.name) + '</span><span class="slug">' + esc(r.slug) + ' · ' + esc(r.category || '—') + '</span></td>' +
+        '<td><span class="name">' + esc(r.name) + '</span><span class="slug">' + esc(why) + '</span></td>' +
         '<td class="num">' + money(r.tvl_usd) + '</td>' +
-        '<td class="num"><span class="oddsbar"><i style="width:' + oddsPct + '%"></i></span>' + oddsPct + '%</td>' +
+        '<td class="num"><span class="oddsbar"><i class="' + band + '" style="width:' + oddsPct + '%"></i></span>' + oddsPct + '%</td>' +
         '<td class="num">' + money(r.if_launch_usd) + '</td>' +
         '<td class="num"><b>' + money(r.implied_value_usd) + '</b><span class="range">' + money(r.implied_p25_usd) + ' – ' + money(r.implied_p75_usd) + '</span></td>' +
         '<td><span class="verdict ' + e.verdict + '">' + e.verdict + '</span></td>' +
         '<td class="num">' + netCell(e) + '</td></tr>';
     }).join('');
-    $('boardNote').textContent = 'Verdicts and nets follow the sliders below the filters: plan ' + (state.planShare * 100).toFixed(2) + '% of TVL (capped $5,000), drop share ' + Math.round(state.dropShare * 100) + '%, horizon ' + state.horizon + ' weeks, gas $25, T-bill 5%, slippage 0.2%. FARM beats the T-bill after all costs; SKIP loses more than twice the gas cost.';
+    $('boardNote').textContent = list.length + ' of ' + rows.length + ' rows · ' + money(tvlSum) + ' TVL · ' + money(impSum) + ' implied. ' +
+      'Verdicts and nets follow the sliders below the filters: plan ' + (state.planShare * 100).toFixed(2) + '% of TVL (capped $5,000), drop share ' + Math.round(state.dropShare * 100) + '%, horizon ' + state.horizon + ' weeks, gas $25, T-bill 5%, slippage 0.2%. FARM beats the T-bill after all costs; SKIP loses more than twice the gas cost. Odds bars: grey under 40%, amber 40–70%, green over 70%. Each row shows why it ranks where it does — TVL × fitted multiple × token odds.';
   }
 
   function renderLive() {
@@ -249,6 +232,43 @@
       '<h3>Farm steps</h3>' +
       '<ol class="steps">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
     setView('detail');
+  }
+
+  // ---- full evidence tables (live in "The model" tab; the board shows the compressed strip above) ----
+  function valueTable(includeShrunk, includeNote) {
+    var h = '<table><thead><tr><th>Value model — typical miss</th><th class="num">LOO</th><th class="num">WF</th><th></th></tr></thead><tbody>';
+    h += V.terms.map(function (t) {
+      return '<tr><td>' + esc(t.label) + '</td><td class="num">×' + t.loo.toFixed(2) + '</td><td class="num">×' + t.wf.toFixed(2) + '</td><td>' + termTag(t) + '</td></tr>';
+    }).join('');
+    if (includeShrunk) {
+      h += V.shrunk_category.map(function (s) {
+        return '<tr><td>category, shrunk k=' + s.shrink + '</td><td class="num">×' + s.loo.toFixed(2) + '</td><td class="num">×' + s.wf.toFixed(2) + '</td><td><span class="tag tested">tested</span></td></tr>';
+      }).join('');
+    }
+    h += '</tbody></table>';
+    if (includeNote) h += '<p class="foot-note">kept = lowers both the leave-one-out and the walk-forward miss · tested = tried and dropped · placebo = a control that must not help. Only the size curve is kept.</p>';
+    return h;
+  }
+  function oddsTable(includeNote) {
+    var h = '<table><thead><tr><th>Token odds — Brier</th><th class="num">LOO</th><th class="num">WF</th><th></th></tr></thead><tbody>';
+    h += O.terms.map(function (t) {
+      return '<tr><td>' + esc(t.label) + '</td><td class="num">' + t.loo.toFixed(3) + '</td><td class="num">' + t.wf.toFixed(3) + '</td><td>' + termTag(t) + '</td></tr>';
+    }).join('');
+    h += '<tr><td>+ control (placebo)</td><td class="num">' + O.placebo_loo.toFixed(3) + '</td><td class="num">' + O.placebo_wf.toFixed(3) + '</td><td><span class="tag placebo">placebo</span></td></tr>';
+    h += '</tbody></table>';
+    if (includeNote) h += '<p class="foot-note">' + O.peers + ' peers with a listing date · ' + O.recorded + ' recorded a token (' + Math.round(O.base_rate * 100) + '% base rate). The placebo shuffles growth across peers; it does not beat the real model.</p>';
+    return h;
+  }
+  function rangeTable(includeNote) {
+    var h = '<table><thead><tr><th>Range honesty</th><th class="num">LOO</th><th class="num">WF</th></tr></thead><tbody>';
+    h += '<tr><td>inside P25–P75 (stated 50%)</td><td class="num">' + Math.round(V.ranges.loo_in_p25_p75 * 100) + '%</td><td class="num">' + Math.round(V.ranges.wf_in_p25_p75 * 100) + '%</td></tr>';
+    h += '<tr><td>inside P10–P90 (stated 80%)</td><td class="num">' + Math.round(V.ranges.loo_in_p10_p90 * 100) + '%</td><td class="num">' + Math.round(V.ranges.wf_in_p10_p90 * 100) + '%</td></tr>';
+    h += '<tr><td>within ×3 of the model</td><td class="num">' + Math.round(V.ranges.within_x3_loo * 100) + '%</td><td class="num">' + Math.round(V.ranges.within_x3_wf * 100) + '%</td></tr>';
+    h += '<tr><td>range, P25–P75</td><td class="num" colspan="2">×' + V.ranges.p25.toFixed(2) + ' – ×' + V.ranges.p75.toFixed(2) + '</td></tr>';
+    h += '<tr><td>range, P10–P90</td><td class="num" colspan="2">×' + V.ranges.p10.toFixed(2) + ' – ×' + V.ranges.p90.toFixed(2) + '</td></tr>';
+    h += '</tbody></table>';
+    if (includeNote) h += '<p class="foot-note">Bootstrap, ' + V.bootstrap.refits + ' refits: intercept ' + V.fit.intercept + ' ± ' + V.bootstrap.intercept_se + ' · slope ' + V.fit.slope + ' ± ' + V.bootstrap.slope_se + ' · multiple at $100M TVL ' + V.bootstrap.multiple_100m.toFixed(3) + '× ± ' + V.bootstrap.multiple_100m_se.toFixed(3) + '.</p>';
+    return h;
   }
 
   function renderModel() {
@@ -336,7 +356,6 @@
   slider('planSize', 'planSizeVal', function (v) { return v.toFixed(2) + '%'; }, function (v) { state.planShare = v / 100; });
   slider('dropShare', 'dropShareVal', function (v) { return v.toFixed(0) + '%'; }, function (v) { state.dropShare = v / 100; });
   slider('horizon', 'horizonVal', function (v) { return v.toFixed(0) + ' wk'; }, function (v) { state.horizon = v; });
-  $('slideNote').textContent = 'Sliders recompute every verdict, net and net/hour live.';
   $('csvBtn').addEventListener('click', exportCSV);
   $('jsonBtn').addEventListener('click', exportJSON);
   document.querySelectorAll('#board th[data-k]').forEach(function (th) {
