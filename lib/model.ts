@@ -66,7 +66,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -165,6 +165,7 @@ export interface OddsModel {
   terms: OddsTermResult[];
   placebo_loo: number;
   placebo_wf: number;
+  family_rates: Record<string, number>;
 }
 
 /** The whole snapshot's accounting: every protocol in exactly one group. */
@@ -226,6 +227,8 @@ export interface BoardRow {
     odds_intercept: number;
     odds_age_weight: number;
     age_years: number;
+    family: string;
+    family_rate: number;
   };
   farm: FarmEconomics;
   farm_steps: string[];
@@ -250,6 +253,8 @@ export interface RadarRow {
   implied_p25_usd: number;
   implied_p75_usd: number;
   size_multiple: number;
+  family: string;
+  family_rate: number;
   farm: FarmEconomics;
   farm_steps: string[];
 }
@@ -471,6 +476,52 @@ export function isRankable(p: SnapshotProtocol): boolean {
   );
 }
 
+/**
+ * The 53 DefiLlama categories grouped into 16 families, from the category names alone:
+ * protocols that do the same kind of thing share a family, so a family's token record is
+ * one number the odds model can learn from instead of 53 thin categories. The grouping was
+ * fixed before any outcome was fitted, and the family term still has to survive both held-out
+ * tests to be kept.
+ */
+export const FAMILY: Record<string, string> = {
+  'Dexs': 'dex',
+  'Lending': 'lending', 'CDP': 'lending', 'CDP Manager': 'lending', 'Uncollateralized Lending': 'lending',
+  'Collateral Management': 'lending', 'Collateral Markets': 'lending',
+  'Liquid Staking': 'staking', 'Liquid Restaking': 'staking', 'Restaking': 'staking', 'Restaked BTC': 'staking', 'Staking Pool': 'staking',
+  'Bridge': 'bridge', 'Canonical Bridge': 'bridge', 'Cross Chain Bridge': 'bridge',
+  'Yield': 'yield', 'Yield Aggregator': 'yield', 'Leveraged Farming': 'yield', 'Farm': 'yield', 'Liquidity Manager': 'yield',
+  'Derivatives': 'derivatives', 'Options': 'derivatives', 'Options Vault': 'derivatives',
+  'Interest Rate Derivatives': 'derivatives', 'Basis Trading': 'derivatives', 'Synthetics': 'derivatives',
+  'RWA': 'rwa', 'CeDeFi': 'rwa', 'Payments': 'rwa', 'Crypto Card Issuer': 'rwa', 'Stablecoin Issuer': 'rwa',
+  'Stablecoin Wrapper': 'rwa', 'Algo-Stables': 'rwa', 'Dual-Token Stablecoin': 'rwa', 'Reserve Currency': 'rwa',
+  'Risk Curators': 'curator', 'Onchain Capital Allocator': 'curator', 'Indexes': 'curator',
+  'CEX': 'exchange', 'Chain': 'chain',
+  'Privacy': 'btc', 'Decentralized BTC': 'btc', 'Anchor BTC': 'btc',
+  'Launchpad': 'launch', 'Token Locker': 'launch', 'Governance Incentives': 'launch',
+  'Prediction Market': 'predict', 'Insurance': 'insurance',
+  'AI Agents': 'ai', 'Decentralized AI': 'ai',
+  'NFT Marketplace': 'other', 'OTC Marketplace': 'other', 'DOR': 'other',
+};
+
+/** A protocol's family, from its category; uncategorised protocols share one family. */
+export function familyOf(p: SnapshotProtocol): string {
+  return FAMILY[p.category ?? ''] ?? 'other';
+}
+
+/** How far a family offset is pulled toward zero in the value model: n/(n+16). */
+export const FAMILY_SHRINK = 16;
+
+/**
+ * Whether a protocol belongs in the token-odds peer set: it records a listing date, and it is
+ * not a bridge, a liquid-staking or restaking product, or an exchange — the same cleanliness the
+ * board applies when it ranks — and its name carries no whole word wrapped, staked or staking.
+ * Versioned pools stay: a version of a protocol whose token trades is a peer that recorded one.
+ * 446 of the 645 dated protocols qualify, 244 of them recording a token.
+ */
+export function isOddsPeer(p: SnapshotProtocol): boolean {
+  return p.listed_at !== null && p.tvl_usd > 0 && !EXCLUDED_CATEGORIES.has(p.category ?? '') && !WRAPPED_WORD.test(p.name);
+}
+
 // ---------------------------------------------------------------- the value model
 
 /** A protocol's 7-day TVL change, clamped to -60%..+120%; unknown is 0. */
@@ -490,9 +541,10 @@ function chainLog(p: SnapshotProtocol): number {
 
 /**
  * The value model fitted on `train` (traded protocols with a listing date). `terms` is a
- * subset of size, category, growth, age, chains, control; `shrink` pulls each category offset
- * toward zero by n/(n+shrink). Returns a predictor of log10(mcap); the second argument is the
- * placebo control's growth, which is 0 at prediction time.
+ * subset of size, family, category, growth, age, chains, control; `shrink` pulls each category
+ * offset toward zero by n/(n+shrink), and each family offset by n/(n+16). Returns a predictor
+ * of log10(mcap); the second argument is the placebo control's growth, which is 0 at
+ * prediction time.
  */
 export function fitValue(
   train: SnapshotProtocol[],
@@ -527,7 +579,22 @@ export function fitValue(
       if (r.length >= 5) catOff.set(c, median(r, 0) * (shrink > 0 ? r.length / (r.length + shrink) : 1));
     }
   }
-  const pred1 = (p: SnapshotProtocol): number => base(p) + (catOff.get(p.category ?? '(uncategorised)') ?? 0);
+  const famOff = new Map<string, number>();
+  if (terms.has('family')) {
+    const res = new Map<string, number[]>();
+    for (const p of train) {
+      const key = familyOf(p);
+      const list = res.get(key);
+      const r = log10(p.mcap_usd!) - base(p);
+      if (list === undefined) res.set(key, [r]);
+      else list.push(r);
+    }
+    for (const [c, r] of res) {
+      famOff.set(c, median(r, 0) * (r.length / (r.length + FAMILY_SHRINK)));
+    }
+  }
+  const pred1 = (p: SnapshotProtocol): number =>
+    base(p) + (famOff.get(familyOf(p)) ?? 0) + (catOff.get(p.category ?? '(uncategorised)') ?? 0);
   const extra = ['growth', 'age', 'chains', 'control'].filter((t) => terms.has(t));
   if (extra.length === 0) return (p) => pred1(p);
   const feats = (p: SnapshotProtocol, ctrl: number): number[] => {
@@ -616,23 +683,25 @@ function walkforwardRatios(data: SnapshotProtocol[], terms: Set<string>, asOf: s
 
 /**
  * The value model, fitted and validated on the dated traded protocols: the term ladder (each
- * cumulative set against the last, kept only when it lowers both the leave-one-out and the
- * walk-forward miss), the shrunk-category variants, the residual ranges and their honesty, and
- * the bootstrap standard errors of the size curve.
+ * cumulative set, kept only when it lowers both the leave-one-out and the walk-forward miss
+ * against the last kept set — a term that only beats a dropped row is not kept), the
+ * shrunk-category variants, the residual ranges and their honesty, and the bootstrap standard
+ * errors of the size curve.
  */
 export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): ValueModel {
   const termSets: { label: string; terms: string[] }[] = [
     { label: 'flat median', terms: [] },
     { label: '+ size curve', terms: ['size'] },
-    { label: '+ category effect', terms: ['size', 'category'] },
-    { label: '+ 7d growth', terms: ['size', 'category', 'growth'] },
-    { label: '+ age', terms: ['size', 'category', 'growth', 'age'] },
-    { label: '+ chain count', terms: ['size', 'category', 'growth', 'age', 'chains'] },
-    { label: '+ control (placebo)', terms: ['size', 'category', 'growth', 'age', 'chains', 'control'] },
+    { label: '+ family effect', terms: ['size', 'family'] },
+    { label: '+ category effect', terms: ['size', 'family', 'category'] },
+    { label: '+ 7d growth', terms: ['size', 'family', 'category', 'growth'] },
+    { label: '+ age', terms: ['size', 'family', 'category', 'growth', 'age'] },
+    { label: '+ chain count', terms: ['size', 'family', 'category', 'growth', 'age', 'chains'] },
+    { label: '+ control (placebo)', terms: ['size', 'family', 'category', 'growth', 'age', 'chains', 'control'] },
   ];
   const terms: ValueTermResult[] = [];
-  let prevLoo = 0;
-  let prevWf = 0;
+  let keptLoo = 0;
+  let keptWf = 0;
   let kept = new Set<string>();
   for (const [idx, s] of termSets.entries()) {
     const set = new Set(s.terms);
@@ -640,16 +709,13 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
     const wf = walkforwardMiss(tradedDated, set, asOf);
     let isKept = false;
     if (idx === 0) {
-      prevLoo = loo;
-      prevWf = wf;
-    } else if (loo < prevLoo && wf < prevWf) {
+      keptLoo = loo;
+      keptWf = wf;
+    } else if (loo < keptLoo && wf < keptWf) {
       kept = set;
       isKept = true;
-      prevLoo = loo;
-      prevWf = wf;
-    } else {
-      prevLoo = loo;
-      prevWf = wf;
+      keptLoo = loo;
+      keptWf = wf;
     }
     terms.push({ label: s.label, terms: s.terms, loo: round4(loo), wf: round4(wf), kept: isKept });
   }
@@ -740,9 +806,30 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
 
 // ---------------------------------------------------------------- the token-odds model
 
-/** The four odds features, in order: age (years), size (log10 TVL), growth (%), chains (log10). */
-function oddsFeatures(p: SnapshotProtocol, asOf: string): number[] {
-  return [ageYears(p, asOf), log10(Math.max(p.tvl_usd, 1)), growthPct(p), chainLog(p)];
+/**
+ * The five odds features, in order: age (years), size (log10 TVL), growth (%), chains (log10),
+ * and the protocol's family token rate — the share of its family's peers that recorded a token,
+ * shrunk 16 pseudo-counts toward the train set's base rate, so a thin family does not shout.
+ * The rate is fitted on the train set only, never on the protocol being scored.
+ */
+function oddsFeatures(p: SnapshotProtocol, asOf: string, famRate: Map<string, number>, baseRate: number): number[] {
+  return [ageYears(p, asOf), log10(Math.max(p.tvl_usd, 1)), growthPct(p), chainLog(p), famRate.get(familyOf(p)) ?? baseRate];
+}
+
+/** A family's token rate on a train set, shrunk toward the train base rate. */
+function famRates(train: SnapshotProtocol[], lambda = 16): { rates: Map<string, number>; base: number } {
+  const base = train.filter((q) => recordsToken(q)).length / train.length;
+  const agg = new Map<string, { n: number; y: number }>();
+  for (const p of train) {
+    const f = familyOf(p);
+    const a = agg.get(f) ?? { n: 0, y: 0 };
+    a.n++;
+    a.y += recordsToken(p) ? 1 : 0;
+    agg.set(f, a);
+  }
+  const rates = new Map<string, number>();
+  for (const [f, a] of agg) rates.set(f, (a.y + lambda * base) / (a.n + lambda));
+  return { rates, base };
 }
 
 /** A logistic regression: standardized features, gradient descent, 500 steps at rate 0.5. */
@@ -750,12 +837,15 @@ export interface LogitModel {
   weights: number[];
   means: number[];
   sds: number[];
+  famRate: Map<string, number>;
+  baseRate: number;
 }
 
 function fitLogit(train: SnapshotProtocol[], use: number[], asOf: string, iters = 500, lr = 0.5): LogitModel {
-  const F = train.map((p) => oddsFeatures(p, asOf));
-  const means = [0, 1, 2, 3].map((j) => F.reduce((a, f) => a + f[j]!, 0) / F.length);
-  const sds = [0, 1, 2, 3].map((j) => {
+  const { rates, base } = famRates(train);
+  const F = train.map((p) => oddsFeatures(p, asOf, rates, base));
+  const means = [0, 1, 2, 3, 4].map((j) => F.reduce((a, f) => a + f[j]!, 0) / F.length);
+  const sds = [0, 1, 2, 3, 4].map((j) => {
     const m = means[j]!;
     const v = Math.sqrt(F.reduce((a, f) => a + (f[j]! - m) * (f[j]! - m), 0) / F.length);
     return v === 0 ? 1 : v;
@@ -763,8 +853,8 @@ function fitLogit(train: SnapshotProtocol[], use: number[], asOf: string, iters 
   const y = train.map((p) => (recordsToken(p) ? 1 : 0));
   const k = 1 + use.length;
   const w = new Array<number>(k).fill(0);
-  const X = train.map((p, i) => {
-    const z = oddsFeatures(p, asOf).map((v, j) => (v - means[j]!) / sds[j]!);
+  const X = train.map((p) => {
+    const z = oddsFeatures(p, asOf, rates, base).map((v, j) => (v - means[j]!) / sds[j]!);
     return [1, ...use.map((u) => z[u]!)];
   });
   for (let it = 0; it < iters; it++) {
@@ -778,11 +868,11 @@ function fitLogit(train: SnapshotProtocol[], use: number[], asOf: string, iters 
     }
     for (let j = 0; j < k; j++) w[j] = w[j]! - (lr * g[j]!) / X.length;
   }
-  return { weights: w, means, sds };
+  return { weights: w, means, sds, famRate: rates, baseRate: base };
 }
 
 function predictLogit(model: LogitModel, p: SnapshotProtocol, use: number[], asOf: string): number {
-  const f = oddsFeatures(p, asOf);
+  const f = oddsFeatures(p, asOf, model.famRate, model.baseRate);
   const z = f.map((v, j) => (v - model.means[j]!) / model.sds[j]!);
   const x = [1, ...use.map((u) => z[u]!)];
   let v = 0;
@@ -823,9 +913,12 @@ function walkforwardBrier(data: SnapshotProtocol[], use: number[], asOf: string,
 }
 
 /**
- * The token-odds model, fitted and validated on the protocols that record a listing date:
- * the feature ladder (each cumulative set against the last, kept only when it lowers both the
- * leave-one-out and the walk-forward Brier), and the placebo that must not help.
+ * The token-odds model, fitted and validated on the odds peers (dated protocols that are not a
+ * bridge, a liquid-staking or restaking product, or an exchange, and whose name carries no
+ * wrapped/staked word — see isOddsPeer): the feature ladder (each cumulative set, kept only
+ * when it lowers both the leave-one-out and the walk-forward Brier against the last kept set),
+ * and the placebo that must not help. Features, in order: age, family token rate, size, growth,
+ * chains.
  */
 export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel {
   const recorded = peers.filter((p) => recordsToken(p)).length;
@@ -833,29 +926,27 @@ export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel
   const sets: { label: string; features: number[] }[] = [
     { label: 'base rate', features: [] },
     { label: '+ age', features: [0] },
-    { label: '+ size', features: [0, 1] },
-    { label: '+ growth', features: [0, 1, 2] },
-    { label: '+ chains', features: [0, 1, 2, 3] },
+    { label: '+ family', features: [0, 4] },
+    { label: '+ size', features: [0, 4, 1] },
+    { label: '+ growth', features: [0, 4, 1, 2] },
+    { label: '+ chains', features: [0, 4, 1, 2, 3] },
   ];
   const terms: OddsTermResult[] = [];
-  let prevLoo = 0;
-  let prevWf = 0;
+  let keptLoo = 0;
+  let keptWf = 0;
   let use: number[] = [];
   for (const [idx, s] of sets.entries()) {
     const loo = looBrier(peers, s.features, asOf, baseRate);
     const wf = walkforwardBrier(peers, s.features, asOf);
     let isKept = false;
     if (idx === 0) {
-      prevLoo = loo;
-      prevWf = wf;
-    } else if (loo < prevLoo && wf < prevWf) {
+      keptLoo = loo;
+      keptWf = wf;
+    } else if (loo < keptLoo && wf < keptWf) {
       use = s.features;
       isKept = true;
-      prevLoo = loo;
-      prevWf = wf;
-    } else {
-      prevLoo = loo;
-      prevWf = wf;
+      keptLoo = loo;
+      keptWf = wf;
     }
     terms.push({ label: s.label, features: s.features, loo: round4(loo), wf: round4(wf), kept: isKept });
   }
@@ -867,10 +958,12 @@ export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel
     return ka < kb ? -1 : ka > kb ? 1 : a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
   });
   const placeboPeers = ordered.map((p, i) => ({ ...p, change_7d: ordered[(i + 1) % ordered.length]!.change_7d }));
-  const placeboLoo = looBrier(placeboPeers, [0, 1, 2, 3], asOf, baseRate);
-  const placeboWf = walkforwardBrier(placeboPeers, [0, 1, 2, 3], asOf);
+  const placeboLoo = looBrier(placeboPeers, [0, 4, 1, 2, 3], asOf, baseRate);
+  const placeboWf = walkforwardBrier(placeboPeers, [0, 4, 1, 2, 3], asOf);
   const finalModel = fitLogit(peers, use, asOf, 500);
   const baseBrier = baseRate * (1 - baseRate);
+  const familyRates: Record<string, number> = {};
+  for (const [f, r] of [...finalModel.famRate.entries()].sort()) familyRates[f] = round4(r);
   return {
     weights: finalModel.weights.map((w) => round4(w)),
     use,
@@ -884,6 +977,7 @@ export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel
     terms,
     placebo_loo: round4(placeboLoo),
     placebo_wf: round4(placeboWf),
+    family_rates: familyRates,
   };
 }
 
@@ -981,7 +1075,7 @@ export function buildBoard(snapshot: Snapshot): {
 } {
   const traded = snapshot.protocols.filter((p) => recordsToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
   const tradedDated = traded.filter((p) => p.listed_at !== null);
-  const peers = snapshot.protocols.filter((p) => p.listed_at !== null && p.tvl_usd > 0);
+  const peers = snapshot.protocols.filter(isOddsPeer);
   const value = fitValueModel(tradedDated, snapshot.as_of);
   const odds = fitOddsModel(peers, snapshot.as_of);
   const keptSet = new Set(value.kept_terms);
@@ -1038,8 +1132,10 @@ export function buildBoard(snapshot: Snapshot): {
         size_intercept: value.fit.intercept,
         size_slope: value.fit.slope,
         odds_intercept: round4(oddsFit.weights[0]!),
-        odds_age_weight: odds.use.length > 0 ? round4(oddsFit.weights[1]!) : 0,
+        odds_age_weight: odds.use.indexOf(0) >= 0 ? round4(oddsFit.weights[odds.use.indexOf(0) + 1]!) : 0,
         age_years: round4(ageYears(s.p, snapshot.as_of)),
+        family: familyOf(s.p),
+        family_rate: round4(oddsFit.famRate.get(familyOf(s.p)) ?? oddsFit.baseRate),
       },
       farm: farmEconomics(s.p, s.implied),
       farm_steps: farmSteps(s.p, age).map(stepText),
@@ -1210,6 +1306,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     implied_p25_usd: row.implied_p25_usd,
     implied_p75_usd: row.implied_p75_usd,
     size_multiple: row.model.size_multiple,
+    family: row.model.family,
+    family_rate: row.model.family_rate,
     farm: row.farm,
     farm_steps: row.farm_steps,
   };
