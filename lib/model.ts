@@ -32,10 +32,10 @@
 //   of its age records a token.
 //
 //   FARM — a plan is 0.02% of the protocol's TVL (floored at $50, capped at $5,000) held for
-//   12 weeks; the airdrop is 7% of the implied value, shared in proportion to the plan's share
+//   12 weeks; the airdrop is 10% of the implied value, shared in proportion to the plan's share
 //   of TVL; costs are $25 of gas, the 5% T-bill return on the plan capital for 12 weeks, and
 //   0.2% slippage. FARM means the position pays for itself and its annualised airdrop yield
-//   beats the 5% T-bill; SKIP means it loses more than twice the gas cost; MARGINAL is the
+//   beats the 5% T-bill; SKIP means it loses more than twice the gas cost; THIN is the
 //   rest. The dashboard's sliders recompute the same arithmetic live.
 //
 // No protocol name is ever special-cased: the same functions score every row, and the
@@ -66,7 +66,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -76,7 +76,9 @@ export const FARM_DEFAULTS = {
   plan_share: 0.0002, // 0.02% of TVL
   plan_floor: 50,
   plan_cap: 5000,
-  drop_share: 0.07, // 7% of the implied value
+  drop_share: 0.1, // 10% of the implied value — observed initial user-airdrop allocations
+  // cluster 5–20% of total supply (Uniswap 15%, Arbitrum 11.62%, ENS 19.6%, Optimism 5%;
+  // 2023 average 20%, Stephanian & Turley, 150+ launches); 10% sits at-or-below that cluster
   horizon_weeks: 12,
   hours: 24, // 12 weeks x ~2 hours a week
   gas_usd: 25,
@@ -99,6 +101,10 @@ export interface ValueTermResult {
   terms: string[];
   loo: number;
   wf: number;
+  loo_meanlog: number;
+  wf_meanlog: number;
+  wf55: number;
+  wf55_meanlog: number;
   kept: boolean;
 }
 
@@ -127,6 +133,25 @@ export interface BootstrapStats {
   multiple_100m_se: number;
 }
 
+/**
+ * A nested term-selection check: the term/feature set is re-picked inside each split, and the
+ * fixed (full-data) set is scored against the re-picked set on the same held-out rows, both
+ * fitted on the split's train part only. A kept set that only wins because it was picked on
+ * the rows it is scored on would show up here as the re-picked set beating the fixed set.
+ * five_fold: a seeded 5-fold split (mulberry32 seed 20261125) over the listing-date order;
+ * wf: one time split, train on the earliest 60% listed, test on the latest 40%. Value scores
+ * are median miss (×), odds scores are mean Brier. Picks are the re-picked kept sets, as
+ * '+'-joined labels ('flat' when the flat median / base rate wins).
+ */
+export interface NestedCheck {
+  five_fold_fixed: number;
+  five_fold_repicked: number;
+  five_fold_picks: string[];
+  wf_fixed: number;
+  wf_repicked: number;
+  wf_pick: string;
+}
+
 /** Everything the value model fitted and validated, for the dashboard's evidence tables. */
 export interface ValueModel {
   fit: SizeCurveFit;
@@ -137,9 +162,12 @@ export interface ValueModel {
   terms: ValueTermResult[];
   kept_terms: string[];
   kept_shrink: number;
-  shrunk_category: { shrink: number; loo: number; wf: number; kept: boolean }[];
+  shrunk_category: { shrink: number; loo: number; wf: number; loo_meanlog: number; wf_meanlog: number; wf55: number; wf55_meanlog: number; kept: boolean }[];
+  category_offsets_64: { category: string; n: number; offset: number }[];
   ranges: RangeStats;
   bootstrap: BootstrapStats;
+  /** The nested term-selection check (re-picked inside each split): set by buildBoard, not by the fit. */
+  nested?: NestedCheck;
 }
 
 /** One row of the token-odds term ladder: a cumulative feature set and its held-out Brier. */
@@ -166,6 +194,14 @@ export interface OddsModel {
   placebo_loo: number;
   placebo_wf: number;
   family_rates: Record<string, number>;
+  called_right_loo: number;
+  called_right_wf: number;
+  growth_se: number;
+  growth_mean: number;
+  growth_per_unit: number;
+  growth_per_unit_se: number;
+  /** The nested term-selection check (re-picked inside each split): set by buildBoard, not by the fit. */
+  nested?: NestedCheck;
 }
 
 /** The whole snapshot's accounting: every protocol in exactly one group. */
@@ -190,7 +226,7 @@ export interface FarmEconomics {
   net: number;
   net_per_hour: number;
   ann_yield: number;
-  verdict: 'FARM' | 'MARGINAL' | 'SKIP';
+  verdict: 'FARM' | 'THIN' | 'SKIP';
 }
 
 /** A farm step: the action, what it costs, and how long it takes. */
@@ -229,6 +265,9 @@ export interface BoardRow {
     age_years: number;
     family: string;
     family_rate: number;
+    /** The odds-ratio contributions of this row's age and growth vs the peer mean: exp(w·z). ×age > 1 means older than average; ×growth < 1 means faster-growing than average. */
+    factor_age: number;
+    factor_growth: number;
   };
   farm: FarmEconomics;
   farm_steps: string[];
@@ -255,6 +294,8 @@ export interface RadarRow {
   size_multiple: number;
   family: string;
   family_rate: number;
+  factor_age: number;
+  factor_growth: number;
   farm: FarmEconomics;
   farm_steps: string[];
 }
@@ -280,10 +321,12 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  /** The market index for the 7D column: the median 7D TVL change across the ranked rows that report one (196 of 198). A row's "vs market" is its own 7D minus this. */
+  market_7d: number;
   value: ValueModel;
   odds: OddsModel;
   accounting: Accounting;
-  farm: { farm: number; marginal: number; skip: number };
+  farm: { farm: number; thin: number; skip: number };
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -653,6 +696,40 @@ function walkforwardMiss(data: SnapshotProtocol[], terms: Set<string>, asOf: str
   return median(ms, 0);
 }
 
+/** Leave-one-out mean |log10 miss| of a term set: the discriminating metric the median cannot see. */
+function looMeanLog(data: SnapshotProtocol[], terms: Set<string>, asOf: string, shrink = 0): number {
+  let s = 0;
+  for (let i = 0; i < data.length; i++) {
+    const train = [...data.slice(0, i), ...data.slice(i + 1)];
+    const fit = fitValue(train, terms, asOf, shrink);
+    const p = data[i]!;
+    s += Math.abs(fit(p) - Math.log10(p.mcap_usd!));
+  }
+  return s / data.length;
+}
+
+/**
+ * Walk-forward mean |log10 miss|: fit only on tokens listed earlier, predict each later one.
+ * minTrain 55 is the second walk-forward design (train-first-55): a term is kept only when it
+ * wins both-ways under both designs, or on mean-log without worsening either median.
+ */
+function walkforwardMeanLog(data: SnapshotProtocol[], terms: Set<string>, asOf: string, minTrain = 20, shrink = 0): number {
+  const d = [...data].sort((a, b) => {
+    const ka = a.listed_at ?? '9999';
+    const kb = b.listed_at ?? '9999';
+    return ka < kb ? -1 : ka > kb ? 1 : a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+  });
+  let s = 0;
+  let n = 0;
+  for (let i = minTrain; i < d.length; i++) {
+    const fit = fitValue(d.slice(0, i), terms, asOf, shrink);
+    const p = d[i]!;
+    s += Math.abs(fit(p) - Math.log10(p.mcap_usd!));
+    n++;
+  }
+  return s / n;
+}
+
 /** The leave-one-out residual ratios actual/predicted of a term set, in protocol order. */
 function looRatios(data: SnapshotProtocol[], terms: Set<string>, asOf: string, shrink = 0): number[] {
   const rs: number[] = [];
@@ -681,6 +758,132 @@ function walkforwardRatios(data: SnapshotProtocol[], terms: Set<string>, asOf: s
   return rs;
 }
 
+/** The value term ladder, as (label, terms) pairs: the single source of truth for the fit and for the nested check's re-pick. */
+const VALUE_TERM_SETS: { label: string; terms: string[] }[] = [
+  { label: 'flat median', terms: [] },
+  { label: '+ size curve', terms: ['size'] },
+  { label: '+ family effect', terms: ['size', 'family'] },
+  { label: '+ category effect', terms: ['size', 'family', 'category'] },
+  { label: '+ 7d growth', terms: ['size', 'family', 'category', 'growth'] },
+  { label: '+ age', terms: ['size', 'family', 'category', 'growth', 'age'] },
+  { label: '+ chain count', terms: ['size', 'family', 'category', 'growth', 'age', 'chains'] },
+  { label: '+ control (placebo)', terms: ['size', 'family', 'category', 'growth', 'age', 'chains', 'control'] },
+];
+
+/**
+ * The both-ways term selection, run on one train set: the ladder's LOO + walk-forward median
+ * miss, then the shrunk-category variants against the size-only set. Returns the kept set and
+ * its shrink (0 when the shrink branch did not fire). This is the same rule fitValueModel
+ * applies to the full data.
+ */
+function selectValueKept(data: SnapshotProtocol[], asOf: string): { kept: Set<string>; shrink: number } {
+  let keptLoo = 0;
+  let keptWf = 0;
+  let kept = new Set<string>();
+  for (const [idx, s] of VALUE_TERM_SETS.entries()) {
+    const set = new Set(s.terms);
+    const loo = looMiss(data, set, asOf);
+    const wf = walkforwardMiss(data, set, asOf);
+    if (idx === 0) {
+      keptLoo = loo;
+      keptWf = wf;
+    } else if (loo < keptLoo && wf < keptWf) {
+      kept = set;
+      keptLoo = loo;
+      keptWf = wf;
+    }
+  }
+  const sizeOnly = new Set(['size']);
+  const sizeLoo = looMiss(data, sizeOnly, asOf);
+  const sizeWf = walkforwardMiss(data, sizeOnly, asOf);
+  let shrink = 0;
+  for (const sh of [5, 10, 20]) {
+    const catSet = new Set(['size', 'category']);
+    const loo = looMiss(data, catSet, asOf, sh);
+    const wf = walkforwardMiss(data, catSet, asOf, 20, sh);
+    if (loo < sizeLoo && wf < sizeWf && shrink === 0) {
+      kept = new Set(['size', 'category']);
+      shrink = sh;
+    }
+  }
+  return { kept, shrink };
+}
+
+/** Listing-date order (undated last), the same order walkforwardMiss walks. */
+function byListedAt(a: SnapshotProtocol, b: SnapshotProtocol): number {
+  const ka = a.listed_at ?? '9999';
+  const kb = b.listed_at ?? '9999';
+  return ka < kb ? -1 : ka > kb ? 1 : a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+}
+
+/** A seeded shuffle (Fisher-Yates, mulberry32) of a copy of the list. */
+function seededShuffle<T>(list: T[], seed: number): T[] {
+  const rng = mulberry32(seed);
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = out[i]!;
+    out[i] = out[j]!;
+    out[j] = t;
+  }
+  return out;
+}
+
+/** The nested check's seed: one seed for both the value and the odds check. */
+const NESTED_SEED = 20261125;
+
+/**
+ * The nested term-selection check for the value model: re-pick the kept set inside each split
+ * and score the fixed (full-data) set against the re-picked set on the same held-out rows,
+ * both fitted on the split's train part only. 5-fold: seeded shuffle of the listing-date
+ * order, fold = position mod 5. Walk-forward: one split, train on the earliest 60% listed,
+ * test on the latest 40%. Scores are median miss.
+ */
+export function nestedValueCheck(tradedDated: SnapshotProtocol[], asOf: string): NestedCheck {
+  const fixed = selectValueKept(tradedDated, asOf);
+  const fixedMiss: number[] = [];
+  const repickedMiss: number[] = [];
+  const picks: string[] = [];
+  const shuffled = seededShuffle([...tradedDated].sort(byListedAt), NESTED_SEED);
+  for (let f = 0; f < 5; f++) {
+    const test = shuffled.filter((_, i) => i % 5 === f);
+    const train = shuffled.filter((_, i) => i % 5 !== f);
+    const repicked = selectValueKept(train, asOf);
+    picks.push([...repicked.kept].sort().join('+') || 'flat');
+    const fixedFit = fitValue(train, fixed.kept, asOf, fixed.shrink);
+    const repickedFit = fitValue(train, repicked.kept, asOf, repicked.shrink);
+    for (const p of test) {
+      const prF = 10 ** fixedFit(p);
+      fixedMiss.push(Math.max(prF / p.mcap_usd!, p.mcap_usd! / prF));
+      const prR = 10 ** repickedFit(p);
+      repickedMiss.push(Math.max(prR / p.mcap_usd!, p.mcap_usd! / prR));
+    }
+  }
+  const ordered = [...tradedDated].sort(byListedAt);
+  const cut = Math.floor(ordered.length * 0.6);
+  const wfTrain = ordered.slice(0, cut);
+  const wfTest = ordered.slice(cut);
+  const wfRepicked = selectValueKept(wfTrain, asOf);
+  const wfFixedFit = fitValue(wfTrain, fixed.kept, asOf, fixed.shrink);
+  const wfRepickedFit = fitValue(wfTrain, wfRepicked.kept, asOf, wfRepicked.shrink);
+  const wfFixedMiss: number[] = [];
+  const wfRepickedMiss: number[] = [];
+  for (const p of wfTest) {
+    const prF = 10 ** wfFixedFit(p);
+    wfFixedMiss.push(Math.max(prF / p.mcap_usd!, p.mcap_usd! / prF));
+    const prR = 10 ** wfRepickedFit(p);
+    wfRepickedMiss.push(Math.max(prR / p.mcap_usd!, p.mcap_usd! / prR));
+  }
+  return {
+    five_fold_fixed: round4(median(fixedMiss, 0)),
+    five_fold_repicked: round4(median(repickedMiss, 0)),
+    five_fold_picks: picks,
+    wf_fixed: round4(median(wfFixedMiss, 0)),
+    wf_repicked: round4(median(wfRepickedMiss, 0)),
+    wf_pick: [...wfRepicked.kept].sort().join('+') || 'flat',
+  };
+}
+
 /**
  * The value model, fitted and validated on the dated traded protocols: the term ladder (each
  * cumulative set, kept only when it lowers both the leave-one-out and the walk-forward miss
@@ -689,16 +892,7 @@ function walkforwardRatios(data: SnapshotProtocol[], terms: Set<string>, asOf: s
  * errors of the size curve.
  */
 export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): ValueModel {
-  const termSets: { label: string; terms: string[] }[] = [
-    { label: 'flat median', terms: [] },
-    { label: '+ size curve', terms: ['size'] },
-    { label: '+ family effect', terms: ['size', 'family'] },
-    { label: '+ category effect', terms: ['size', 'family', 'category'] },
-    { label: '+ 7d growth', terms: ['size', 'family', 'category', 'growth'] },
-    { label: '+ age', terms: ['size', 'family', 'category', 'growth', 'age'] },
-    { label: '+ chain count', terms: ['size', 'family', 'category', 'growth', 'age', 'chains'] },
-    { label: '+ control (placebo)', terms: ['size', 'family', 'category', 'growth', 'age', 'chains', 'control'] },
-  ];
+  const termSets = VALUE_TERM_SETS;
   const terms: ValueTermResult[] = [];
   let keptLoo = 0;
   let keptWf = 0;
@@ -707,6 +901,10 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
     const set = new Set(s.terms);
     const loo = looMiss(tradedDated, set, asOf);
     const wf = walkforwardMiss(tradedDated, set, asOf);
+    const looMean = looMeanLog(tradedDated, set, asOf);
+    const wfMean = walkforwardMeanLog(tradedDated, set, asOf);
+    const wf55 = walkforwardMiss(tradedDated, set, asOf, 55);
+    const wf55Mean = walkforwardMeanLog(tradedDated, set, asOf, 55);
     let isKept = false;
     if (idx === 0) {
       keptLoo = loo;
@@ -717,21 +915,26 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
       keptLoo = loo;
       keptWf = wf;
     }
-    terms.push({ label: s.label, terms: s.terms, loo: round4(loo), wf: round4(wf), kept: isKept });
+    terms.push({ label: s.label, terms: s.terms, loo: round4(loo), wf: round4(wf), loo_meanlog: round4(looMean), wf_meanlog: round4(wfMean), wf55: round4(wf55), wf55_meanlog: round4(wf55Mean), kept: isKept });
   }
   // The raw category offsets were too noisy for walk-forward; try shrinking them toward zero.
   const sizeOnly = terms[1]!;
   const shrunkCategory: { shrink: number; loo: number; wf: number; kept: boolean }[] = [];
   let keptShrink = 0;
   for (const shrink of [5, 10, 20]) {
-    const loo = looMiss(tradedDated, new Set(['size', 'category']), asOf, shrink);
-    const wf = walkforwardMiss(tradedDated, new Set(['size', 'category']), asOf, 20, shrink);
+    const catSet = new Set(['size', 'category']);
+    const loo = looMiss(tradedDated, catSet, asOf, shrink);
+    const wf = walkforwardMiss(tradedDated, catSet, asOf, 20, shrink);
+    const looMean = looMeanLog(tradedDated, catSet, asOf, shrink);
+    const wfMean = walkforwardMeanLog(tradedDated, catSet, asOf, 20, shrink);
+    const wf55 = walkforwardMiss(tradedDated, catSet, asOf, 55, shrink);
+    const wf55Mean = walkforwardMeanLog(tradedDated, catSet, asOf, 55, shrink);
     const isKept = loo < sizeOnly.loo && wf < sizeOnly.wf;
     if (isKept && keptShrink === 0) {
       kept = new Set(['size', 'category']);
       keptShrink = shrink;
     }
-    shrunkCategory.push({ shrink, loo: round4(loo), wf: round4(wf), kept: isKept });
+    shrunkCategory.push({ shrink, loo: round4(loo), wf: round4(wf), loo_meanlog: round4(looMean), wf_meanlog: round4(wfMean), wf55: round4(wf55), wf55_meanlog: round4(wf55Mean), kept: isKept });
   }
   const keptTerms = [...kept].sort();
   const keptSet = kept.size > 0 ? kept : new Set<string>();
@@ -770,6 +973,19 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
     within_x3_loo: round4(looR.filter((r) => r >= 1 / 3 && r <= 3).length / looR.length),
     within_x3_wf: round4(wfR.filter((r) => r >= 1 / 3 && r <= 3).length / wfR.length),
   };
+  // Category median offsets (shrink 64, n>=5) on the size-only residuals, for the board's
+  // fitted-values note: only 8 categories qualify; the range shows the slope gap to #1 is noise.
+  const catRes = new Map<string, number[]>();
+  for (const p of tradedDated) {
+    const key = p.category ?? '(uncategorised)';
+    const list = catRes.get(key) ?? [];
+    list.push(log10(p.mcap_usd!) - (beta[0]! + beta[1]! * log10(p.tvl_usd)));
+    catRes.set(key, list);
+  }
+  const categoryOffsets64 = [...catRes.entries()]
+    .filter(([, r]) => r.length >= 5)
+    .map(([category, r]) => ({ category, n: r.length, offset: round4(median(r, 0) * (r.length / (r.length + 64))) }))
+    .sort((a, b) => a.offset - b.offset);
   // Bootstrap standard errors: 200 refits on resamples of the dated traded protocols.
   const rng = mulberry32(20261114);
   const betas: number[][] = [];
@@ -799,6 +1015,7 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
     kept_terms: keptTerms,
     kept_shrink: keptShrink,
     shrunk_category: shrunkCategory,
+    category_offsets_64: categoryOffsets64,
     ranges,
     bootstrap,
   };
@@ -809,15 +1026,18 @@ export function fitValueModel(tradedDated: SnapshotProtocol[], asOf: string): Va
 /**
  * The five odds features, in order: age (years), size (log10 TVL), growth (%), chains (log10),
  * and the protocol's family token rate — the share of its family's peers that recorded a token,
- * shrunk 16 pseudo-counts toward the train set's base rate, so a thin family does not shout.
- * The rate is fitted on the train set only, never on the protocol being scored.
+ * shrunk 256 pseudo-counts toward the train set's base rate, so a thin family does not shout.
+ * The rate is fitted on the train set only, never on the protocol being scored. The 256-shrink
+ * rate is the E10 ridge-λ=256 family: the ridge offset (k − n·base)/(n+256) equals this rate up
+ * to the constant base rate, which the logistic standardisation removes, so the fitted model is
+ * exactly the ridge-λ=256 variant (Brier 0.1893/0.2080, total $954.9M).
  */
 function oddsFeatures(p: SnapshotProtocol, asOf: string, famRate: Map<string, number>, baseRate: number): number[] {
   return [ageYears(p, asOf), log10(Math.max(p.tvl_usd, 1)), growthPct(p), chainLog(p), famRate.get(familyOf(p)) ?? baseRate];
 }
 
-/** A family's token rate on a train set, shrunk toward the train base rate. */
-function famRates(train: SnapshotProtocol[], lambda = 16): { rates: Map<string, number>; base: number } {
+/** A family's token rate on a train set, shrunk toward the train base rate (λ=256: the E10 ridge family). */
+function famRates(train: SnapshotProtocol[], lambda = 256): { rates: Map<string, number>; base: number } {
   const base = train.filter((q) => recordsToken(q)).length / train.length;
   const agg = new Map<string, { n: number; y: number }>();
   for (const p of train) {
@@ -912,6 +1132,130 @@ function walkforwardBrier(data: SnapshotProtocol[], use: number[], asOf: string,
   return s / n;
 }
 
+/** Leave-one-out called-right share of a feature set: prediction ≥0.5 counts as "records a token". */
+function looCalledRight(data: SnapshotProtocol[], use: number[], asOf: string, baseRate: number, iters = 200): number {
+  let right = 0;
+  for (let i = 0; i < data.length; i++) {
+    const train = [...data.slice(0, i), ...data.slice(i + 1)];
+    const pr = use.length === 0 ? baseRate : predictLogit(fitLogit(train, use, asOf, iters), data[i]!, use, asOf);
+    if ((pr >= 0.5) === recordsToken(data[i]!)) right++;
+  }
+  return right / data.length;
+}
+
+/** Walk-forward called-right share: fit only on protocols listed earlier, predict each later one. */
+function walkforwardCalledRight(data: SnapshotProtocol[], use: number[], asOf: string, minTrain = 60, iters = 200): number {
+  const d = [...data].sort((a, b) => {
+    const ka = a.listed_at ?? '9999';
+    const kb = b.listed_at ?? '9999';
+    return ka < kb ? -1 : ka > kb ? 1 : a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+  });
+  let right = 0;
+  let n = 0;
+  for (let i = minTrain; i < d.length; i++) {
+    const train = d.slice(0, i);
+    const base = train.filter((q) => recordsToken(q)).length / train.length;
+    const pr = use.length === 0 ? base : predictLogit(fitLogit(train, use, asOf, iters), d[i]!, use, asOf);
+    if ((pr >= 0.5) === recordsToken(d[i]!)) right++;
+    n++;
+  }
+  return right / n;
+}
+
+/** The odds feature ladder, as (label, features) pairs: the single source of truth for the fit and for the nested check's re-pick. Features, in order: age, family token rate, size, growth, chains. */
+const ODDS_FEATURE_SETS: { label: string; features: number[] }[] = [
+  { label: 'base rate', features: [] },
+  { label: '+ age', features: [0] },
+  { label: '+ family', features: [0, 4] },
+  { label: '+ size', features: [0, 4, 1] },
+  { label: '+ growth', features: [0, 4, 1, 2] },
+  { label: '+ chains', features: [0, 4, 1, 2, 3] },
+];
+
+/**
+ * The both-ways feature selection, run on one train set: the ladder's LOO + walk-forward
+ * Brier, kept only when a set lowers both against the last kept set. This is the same rule
+ * fitOddsModel applies to the full data.
+ */
+function selectOddsUse(data: SnapshotProtocol[], asOf: string): number[] {
+  const baseRate = data.filter((p) => recordsToken(p)).length / data.length;
+  let keptLoo = 0;
+  let keptWf = 0;
+  let use: number[] = [];
+  for (const [idx, s] of ODDS_FEATURE_SETS.entries()) {
+    const loo = looBrier(data, s.features, asOf, baseRate);
+    const wf = walkforwardBrier(data, s.features, asOf);
+    if (idx === 0) {
+      keptLoo = loo;
+      keptWf = wf;
+    } else if (loo < keptLoo && wf < keptWf) {
+      use = s.features;
+      keptLoo = loo;
+      keptWf = wf;
+    }
+  }
+  return use;
+}
+
+/**
+ * The nested term-selection check for the odds model: re-pick the feature set inside each
+ * split and score the fixed (full-data) set against the re-picked set on the same held-out
+ * peers, both fitted on the split's train part only. Same designs as the value check (seeded
+ * 5-fold, one walk-forward split at 60%); scores are mean Brier, and every fit uses the
+ * 200-iteration fits the ladder itself uses.
+ */
+export function nestedOddsCheck(peers: SnapshotProtocol[], asOf: string): NestedCheck {
+  const fixedUse = selectOddsUse(peers, asOf);
+  const names = ['age', 'family', 'size', 'growth', 'chains'];
+  const useLabel = (use: number[]): string => (use.length === 0 ? 'base rate' : use.map((u) => names[u]!).join('+'));
+  const fixedSq: number[] = [];
+  const repickedSq: number[] = [];
+  const picks: string[] = [];
+  const shuffled = seededShuffle([...peers].sort(byListedAt), NESTED_SEED);
+  for (let f = 0; f < 5; f++) {
+    const test = shuffled.filter((_, i) => i % 5 === f);
+    const train = shuffled.filter((_, i) => i % 5 !== f);
+    const repickedUse = selectOddsUse(train, asOf);
+    picks.push(useLabel(repickedUse));
+    const trainBase = train.filter((p) => recordsToken(p)).length / train.length;
+    const fixedModel = fitLogit(train, fixedUse, asOf, 200);
+    const repickedModel = fitLogit(train, repickedUse, asOf, 200);
+    for (const p of test) {
+      const y = recordsToken(p) ? 1 : 0;
+      const prF = fixedUse.length === 0 ? trainBase : predictLogit(fixedModel, p, fixedUse, asOf);
+      fixedSq.push((prF - y) * (prF - y));
+      const prR = repickedUse.length === 0 ? trainBase : predictLogit(repickedModel, p, repickedUse, asOf);
+      repickedSq.push((prR - y) * (prR - y));
+    }
+  }
+  const ordered = [...peers].sort(byListedAt);
+  const cut = Math.floor(ordered.length * 0.6);
+  const wfTrain = ordered.slice(0, cut);
+  const wfTest = ordered.slice(cut);
+  const wfRepickedUse = selectOddsUse(wfTrain, asOf);
+  const wfTrainBase = wfTrain.filter((p) => recordsToken(p)).length / wfTrain.length;
+  const wfFixedModel = fitLogit(wfTrain, fixedUse, asOf, 200);
+  const wfRepickedModel = fitLogit(wfTrain, wfRepickedUse, asOf, 200);
+  const wfFixedSq: number[] = [];
+  const wfRepickedSq: number[] = [];
+  for (const p of wfTest) {
+    const y = recordsToken(p) ? 1 : 0;
+    const prF = fixedUse.length === 0 ? wfTrainBase : predictLogit(wfFixedModel, p, fixedUse, asOf);
+    wfFixedSq.push((prF - y) * (prF - y));
+    const prR = wfRepickedUse.length === 0 ? wfTrainBase : predictLogit(wfRepickedModel, p, wfRepickedUse, asOf);
+    wfRepickedSq.push((prR - y) * (prR - y));
+  }
+  const mean = (vs: number[]): number => vs.reduce((a, b) => a + b, 0) / vs.length;
+  return {
+    five_fold_fixed: round4(mean(fixedSq)),
+    five_fold_repicked: round4(mean(repickedSq)),
+    five_fold_picks: picks,
+    wf_fixed: round4(mean(wfFixedSq)),
+    wf_repicked: round4(mean(wfRepickedSq)),
+    wf_pick: useLabel(wfRepickedUse),
+  };
+}
+
 /**
  * The token-odds model, fitted and validated on the odds peers (dated protocols that are not a
  * bridge, a liquid-staking or restaking product, or an exchange, and whose name carries no
@@ -923,14 +1267,7 @@ function walkforwardBrier(data: SnapshotProtocol[], use: number[], asOf: string,
 export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel {
   const recorded = peers.filter((p) => recordsToken(p)).length;
   const baseRate = recorded / peers.length;
-  const sets: { label: string; features: number[] }[] = [
-    { label: 'base rate', features: [] },
-    { label: '+ age', features: [0] },
-    { label: '+ family', features: [0, 4] },
-    { label: '+ size', features: [0, 4, 1] },
-    { label: '+ growth', features: [0, 4, 1, 2] },
-    { label: '+ chains', features: [0, 4, 1, 2, 3] },
-  ];
+  const sets = ODDS_FEATURE_SETS;
   const terms: OddsTermResult[] = [];
   let keptLoo = 0;
   let keptWf = 0;
@@ -964,6 +1301,25 @@ export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel
   const baseBrier = baseRate * (1 - baseRate);
   const familyRates: Record<string, number> = {};
   for (const [f, r] of [...finalModel.famRate.entries()].sort()) familyRates[f] = round4(r);
+  // Called-right for the kept set, and bootstrap SEs for the growth weight (E12): 200 refits
+  // on resampled peers, same seed family as the value bootstrap. The growth weight is
+  // standardised; per-unit divides by the growth feature's sd, per refit.
+  const calledRightLoo = looCalledRight(peers, use, asOf, baseRate);
+  const calledRightWf = walkforwardCalledRight(peers, use, asOf);
+  const growthIdx = use.indexOf(2);
+  const rng = mulberry32(20261115);
+  const growthW: number[] = [];
+  const growthPerUnit: number[] = [];
+  for (let k = 0; k < 200; k++) {
+    const sample: SnapshotProtocol[] = [];
+    for (let i = 0; i < peers.length; i++) sample.push(peers[Math.floor(rng() * peers.length)]!);
+    const m = fitLogit(sample, use, asOf, 500);
+    if (growthIdx >= 0) {
+      growthW.push(m.weights[growthIdx + 1]!);
+      growthPerUnit.push(m.weights[growthIdx + 1]! / m.sds[2]!);
+    }
+  }
+  const mean = (vs: number[]): number => vs.reduce((a, b) => a + b, 0) / vs.length;
   return {
     weights: finalModel.weights.map((w) => round4(w)),
     use,
@@ -978,6 +1334,12 @@ export function fitOddsModel(peers: SnapshotProtocol[], asOf: string): OddsModel
     placebo_loo: round4(placeboLoo),
     placebo_wf: round4(placeboWf),
     family_rates: familyRates,
+    called_right_loo: round4(calledRightLoo),
+    called_right_wf: round4(calledRightWf),
+    growth_se: round4(sampleSd(growthW)),
+    growth_mean: round4(mean(growthW)),
+    growth_per_unit: growthIdx >= 0 ? round4(finalModel.weights[growthIdx + 1]! / finalModel.sds[2]!) : 0,
+    growth_per_unit_se: round4(sampleSd(growthPerUnit)),
   };
 }
 
@@ -1024,7 +1386,7 @@ export function farmEconomics(p: SnapshotProtocol, implied: number): FarmEconomi
   let verdict: FarmEconomics['verdict'];
   if (net > 0 && annYield >= FARM_DEFAULTS.tbill_rate) verdict = 'FARM';
   else if (net <= -FARM_DEFAULTS.skip_loss_usd) verdict = 'SKIP';
-  else verdict = 'MARGINAL';
+  else verdict = 'THIN';
   return {
     plan: Math.round(plan * 100) / 100,
     gross: Math.round(gross * 100) / 100,
@@ -1052,7 +1414,7 @@ export function farmEconomicsWith(
   let verdict: FarmEconomics['verdict'];
   if (net > 0 && annYield >= FARM_DEFAULTS.tbill_rate) verdict = 'FARM';
   else if (net <= -FARM_DEFAULTS.skip_loss_usd) verdict = 'SKIP';
-  else verdict = 'MARGINAL';
+  else verdict = 'THIN';
   return {
     plan: Math.round(plan * 100) / 100,
     gross: Math.round(gross * 100) / 100,
@@ -1078,6 +1440,11 @@ export function buildBoard(snapshot: Snapshot): {
   const peers = snapshot.protocols.filter(isOddsPeer);
   const value = fitValueModel(tradedDated, snapshot.as_of);
   const odds = fitOddsModel(peers, snapshot.as_of);
+  // The nested term-selection check: re-pick the kept set inside each split and score the
+  // fixed set against it. Computed once per board (the odds half is the expensive part, ~100 s
+  // of logit fits); the fitted models above are untouched by it.
+  value.nested = nestedValueCheck(tradedDated, snapshot.as_of);
+  odds.nested = nestedOddsCheck(peers, snapshot.as_of);
   const keptSet = new Set(value.kept_terms);
   const valueFit = fitValue(tradedDated, keptSet, snapshot.as_of, value.kept_shrink);
   const oddsFit = fitLogit(peers, odds.use, snapshot.as_of, 500);
@@ -1108,6 +1475,13 @@ export function buildBoard(snapshot: Snapshot): {
     const p25 = Math.max(1, Math.round(s.ifLaunch * value.ranges.p25 * s.tokenOdds));
     const p75 = Math.max(1, Math.round(s.ifLaunch * value.ranges.p75 * s.tokenOdds));
     const sizeMultiple = s.ifLaunch / Math.max(s.p.tvl_usd, 1);
+    // The odds-ratio contributions of this row's age and growth vs the peer mean: exp(w·z),
+    // where w is the fitted logistic weight and z the standardised feature. A feature the
+    // kept set does not use has weight 0, so its factor is exactly 1.
+    const wAge = odds.use.indexOf(0) >= 0 ? oddsFit.weights[odds.use.indexOf(0) + 1]! : 0;
+    const wGrowth = odds.use.indexOf(2) >= 0 ? oddsFit.weights[odds.use.indexOf(2) + 1]! : 0;
+    const factorAge = Math.exp(wAge * ((ageYears(s.p, snapshot.as_of) - oddsFit.means[0]!) / oddsFit.sds[0]!));
+    const factorGrowth = Math.exp(wGrowth * ((growthPct(s.p) - oddsFit.means[2]!) / oddsFit.sds[2]!));
     return {
       rank: i + 1,
       slug: s.p.slug,
@@ -1136,6 +1510,8 @@ export function buildBoard(snapshot: Snapshot): {
         age_years: round4(ageYears(s.p, snapshot.as_of)),
         family: familyOf(s.p),
         family_rate: round4(oddsFit.famRate.get(familyOf(s.p)) ?? oddsFit.baseRate),
+        factor_age: round4(factorAge),
+        factor_growth: round4(factorGrowth),
       },
       farm: farmEconomics(s.p, s.implied),
       farm_steps: farmSteps(s.p, age).map(stepText),
@@ -1308,6 +1684,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     size_multiple: row.model.size_multiple,
     family: row.model.family,
     family_rate: row.model.family_rate,
+    factor_age: row.model.factor_age,
+    factor_growth: row.model.factor_growth,
     farm: row.farm,
     farm_steps: row.farm_steps,
   };
@@ -1318,10 +1696,11 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const { board, value, odds, accounting } = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
-  const farm = { farm: 0, marginal: 0, skip: 0 };
+  const market7d = median(board.map((r) => r.change_7d).filter((v): v is number => v !== null), 0);
+  const farm = { farm: 0, thin: 0, skip: 0 };
   for (const r of board) {
     if (r.farm.verdict === 'FARM') farm.farm++;
-    else if (r.farm.verdict === 'MARGINAL') farm.marginal++;
+    else if (r.farm.verdict === 'THIN') farm.thin++;
     else farm.skip++;
   }
   const radar: RadarData = {
@@ -1333,6 +1712,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    market_7d: round4(market7d),
     value,
     odds,
     accounting,

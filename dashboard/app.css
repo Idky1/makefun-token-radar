@@ -20,7 +20,7 @@ body {
   font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
-.top { position: relative; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 0 0; }
+.top { position: relative; background: var(--panel); border-bottom: 1px solid var(--line); padding: 6px 0 0; }
 .top h1 { margin: 0; font-size: 24px; letter-spacing: -0.5px; }
 /* signature brand mark, floating gently above the board */
 .brand-float {
@@ -44,56 +44,71 @@ body {
   font-size: 13px; color: var(--accent); border: 1px solid var(--accent-dim);
   border-radius: 999px; padding: 2px 9px; vertical-align: middle; margin-left: 8px;
 }
-.sub { margin: 4px 0 2px; color: var(--muted); font-size: 14px; }
-.src { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.sub { margin: 2px 0 1px; color: var(--muted); font-size: 14px; }
+.src { margin: 0 0 4px; color: var(--muted); font-size: 12px; }
 .tabs { display: flex; gap: 4px; }
 .tab {
   background: none; border: none; border-bottom: 3px solid transparent;
   color: var(--muted); font: inherit; font-weight: 600; padding: 6px 12px; cursor: pointer;
 }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
-main { padding: 14px 0 40px; }
+main { padding: 10px 0 40px; }
 
 /* the verdict row: the single biggest line on the page */
-.verdict-row { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.25; margin: 2px 0 6px; }
+.verdict-row { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.25; margin: 0 0 5px; }
 .verdict-row .good { color: var(--green); }
 .verdict-row .acc { color: var(--accent); }
-/* compact KPI strip: one muted line, numbers in text colour */
-.kpis-compact { font-size: 12.5px; color: var(--muted); margin: 0 0 8px; line-height: 1.5; }
-.kpis-compact b { color: var(--text); font-weight: 600; }
+/* KPI strip: three cards, one per model leg — value, odds, farm (v5: the compact one-line strip is retired) */
+.kpi-strip { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 0 0 6px; }
+.kpi-strip .kpi {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.35;
+}
+.kpi-strip .kpi b { color: var(--text); font-weight: 600; }
+.kpi-strip .kpi .k { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin-bottom: 1px; }
+.kpi-strip .kpi .big { font-size: 15px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
 
 /* formula, accounting, verification */
 .formula {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-  padding: 7px 12px; margin: 0 0 8px;
+  padding: 5px 12px; margin: 0 0 6px;
 }
 #formulaBar { white-space: nowrap; overflow: hidden; }
 .formula b { color: var(--accent); }
 .accounting {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-  padding: 6px 12px; font-size: 13px; margin-bottom: 6px; line-height: 1.35;
+  padding: 5px 12px; font-size: 13px; margin-bottom: 5px; line-height: 1.35;
 }
 .accounting b { color: var(--text); }
+/* accounting bar: the 9 ledger segments, widths proportional to the 758 protocols
+   (segment colours are inline in app.js: 2 ranked greens, 2 token blues, 5 left-out greys) */
+.acc-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; margin: 2px 0 4px; background: var(--panel2); }
+.acc-bar i { display: block; height: 100%; }
 .verify-inline { color: var(--green); }
 
 /* evidence tables on the board: the full ladders, three across, compact type */
-.evidence { display: grid; grid-template-columns: 1.15fr 1fr 0.9fr; gap: 8px; margin-bottom: 6px; align-items: start; }
+.evidence { display: grid; grid-template-columns: 1.5fr 1fr 0.85fr; gap: 8px; margin-bottom: 4px; align-items: start; }
 .evidence > div { min-width: 0; }
 .ev-block h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin: 0 0 4px; line-height: 1.35; white-space: nowrap; }
 .evidence table { font-size: 12px; }
 .evidence th, .evidence td { padding: 1px 8px; font-size: 12px; }
+.evidence td.num, .evidence th.num { white-space: nowrap; }
 .evidence td:last-child { white-space: nowrap; }
-.evidence .ev-read { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.45; }
+.evidence .ev-read { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); margin: 0; line-height: 1.4; }
 .evidence .ev-read b { color: var(--text); }
 .tag { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 6px; white-space: nowrap; }
 .tag.kept { background: var(--green-dim); color: var(--green); }
 .tag.tested { background: var(--panel2); color: var(--muted); }
 .tag.placebo { background: #3d2430; color: var(--red); }
 .evidence .foot-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+/* mean |log10 miss|, shown muted next to the median miss in each value-ladder cell */
+.meanlog { color: var(--muted); font-size: 11px; }
+/* undated-row flag: age unknown, imputed 1y (tooltip carries the full sentence) */
+.age-flag { color: var(--accent); font-weight: 700; cursor: help; }
 
 /* controls */
-.controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
 .controls input, .controls select, .sliders button {
   background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 5px 8px; font: inherit;
@@ -108,12 +123,13 @@ main { padding: 14px 0 40px; }
 }
 .vtab.active { color: var(--text); border-color: var(--accent); background: var(--panel2); }
 .vtab .n { color: var(--accent); }
-.sliders { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+.sliders { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
 .sliders label { display: flex; align-items: center; gap: 6px; }
 .sliders input[type="range"] { width: 110px; accent-color: var(--accent); }
 .sliders span { color: var(--text); font-variant-numeric: tabular-nums; min-width: 44px; }
 
-/* board table: dense rows, two tight lines per protocol */
+/* board table: dense rows, one tight line per protocol (v5: the per-row why-line is hidden and
+   the net / range second lines run inline, so the table keeps 11+ rows with the KPI strip above) */
 table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
 th, td { padding: 1px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.3; }
 thead th { background: var(--panel2); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; }
@@ -124,6 +140,28 @@ tbody tr:hover { background: var(--panel2); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td .name { font-weight: 650; line-height: 1.35; }
 td .slug { color: var(--muted); font-size: 11.5px; line-height: 1.3; display: block; white-space: nowrap; }
+/* v5: the board's per-row why-line is hidden — it stays in the row tooltip and the detail view,
+   so the table keeps 11 rows with the KPI strip above it (the live table keeps its slugs) */
+#board td .slug { display: none; }
+/* v5: one tight line per row — the odds, implied range and net /h never wrap; the name may
+   wrap (max 140px) so a 28-character name does not push the 14 columns past the viewport */
+#board th:nth-child(2) { width: 150px; }
+#board th:nth-child(4) { width: 100px; }
+#board td:nth-child(2) { max-width: 140px; }
+#board td:nth-child(6), #board td:nth-child(12), #board td:nth-child(14) { white-space: nowrap; }
+/* factor columns (×size / ×odds / ×age / ×growth): compact, muted, never wrap */
+#board th.factor, #board td.factor { font-size: 11px; color: var(--muted); padding: 1px 3px; white-space: nowrap; }
+/* the market-relative part of the 7D cell: muted, one line with the row's own 7D */
+.market-rel { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+/* v5: tighter board padding so the 14 nowrap columns fit the 984px content width */
+#board th, #board td { padding: 1px 5px; font-size: 12px; }
+/* in-table plan expansion for the top rows: the farm math + per-step plan inline under
+   the row, so the work shows even when the verdict is SKIP (top 3 rows, live on the sliders) */
+#board tr.plan-expand td { background: var(--panel2); font-size: 12.5px; color: var(--muted); padding: 6px 10px 8px; }
+#board tr.plan-expand .plan-math b { color: var(--accent); }
+#board tr.plan-expand .steps { margin: 4px 0 0; padding-left: 18px; }
+#board tr.plan-expand .steps li { margin: 2px 0; }
+#board tr.plan-expand .plan-more { margin: 4px 0 0; font-style: italic; }
 .pill {
   display: inline-block; background: var(--panel2); border: 1px solid var(--line);
   border-radius: 999px; padding: 1px 8px; font-size: 12px; margin: 1px 2px 1px 0; white-space: nowrap;
@@ -131,16 +169,16 @@ td .slug { color: var(--muted); font-size: 11.5px; line-height: 1.3; display: bl
 .up { color: var(--green); }
 .down { color: var(--red); }
 .note { color: var(--muted); font-size: 14px; }
-.oddsbar { display: inline-block; width: 54px; height: 8px; background: var(--panel2); border-radius: 999px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+.oddsbar { display: inline-block; width: 36px; height: 8px; background: var(--panel2); border-radius: 999px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
 .oddsbar i { display: block; height: 100%; background: var(--accent); }
 /* odds bands: grey under 40%, amber 40–70%, green over 70% (the % figure beside the bar is the second cue) */
 .oddsbar i.odds-low { background: #5b6b7d; }
 .oddsbar i.odds-mid { background: var(--accent); }
 .oddsbar i.odds-high { background: var(--green); }
-.range { color: var(--muted); font-size: 12.5px; display: block; white-space: nowrap; }
+.range { color: var(--muted); font-size: 11.5px; display: inline; margin-left: 4px; white-space: nowrap; }
 .verdict { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 9px; }
 .verdict.FARM { background: var(--green-dim); color: var(--green); }
-.verdict.MARGINAL { background: var(--panel2); color: var(--accent); border: 1px solid var(--accent-dim); }
+.verdict.THIN { background: var(--panel2); color: var(--accent); border: 1px solid var(--accent-dim); }
 .verdict.SKIP { background: var(--panel2); color: var(--muted); }
 .netpos { color: var(--green); }
 .netneg { color: var(--red); }

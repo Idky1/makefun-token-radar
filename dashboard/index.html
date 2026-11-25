@@ -23,7 +23,7 @@
 <main class="wrap">
   <section id="boardView">
     <p class="verdict-row" id="verdictRow"></p>
-    <p class="kpis-compact" id="kpisCompact"></p>
+    <div class="kpi-strip" id="kpiStrip"></div>
     <p class="formula" id="formulaBar"></p>
     <div class="accounting" id="accounting"></div>
     <div class="evidence" id="evidence"></div>
@@ -42,24 +42,29 @@
         <option value="implied">Implied</option>
         <option value="tvl">TVL</option>
         <option value="odds">Token odds</option>
+        <option value="growth">7d growth</option>
+        <option value="age">Age</option>
         <option value="net" selected>Net of fees</option>
       </select>
     </section>
     <section class="sliders" id="sliders">
       <label>Plan size <input id="planSize" type="range" min="0.005" max="0.1" step="0.005" value="0.02"> <span id="planSizeVal"></span> of TVL</label>
-      <label>Drop share <input id="dropShare" type="range" min="1" max="20" step="1" value="7"> <span id="dropShareVal"></span></label>
+      <label>Drop share <input id="dropShare" type="range" min="1" max="20" step="1" value="10"> <span id="dropShareVal"></span></label>
       <label>Horizon <input id="horizon" type="range" min="4" max="52" step="2" value="12"> <span id="horizonVal"></span></label>
+      <label>T-bill <input id="tbill" type="range" min="0" max="8" step="1" value="5"> <span id="tbillVal"></span>/yr</label>
       <button id="csvBtn" type="button">CSV</button>
       <button id="jsonBtn" type="button">JSON</button>
     </section>
     <table id="board">
       <thead><tr>
         <th data-k="rank">#</th><th data-k="name">Protocol</th>
-        <th data-k="tvl">TVL</th><th data-k="odds">Token odds</th>
-        <th data-k="iflaunch">If it launches</th><th data-k="implied">Implied value</th>
+        <th data-k="tvl">TVL</th><th data-k="growth" title="7D TVL change; the bracket is the gap to the market (median 7D across the ranked rows)">7d</th><th data-k="age">Age</th><th data-k="odds">Token odds</th>
+        <th data-k="iflaunch">If launches</th><th class="factor" title="Size multiple: if-it-launches / TVL">×size</th><th class="factor" title="Token odds as a factor">×odds</th><th class="factor" title="Odds-ratio contribution of this row's age vs the peer mean">×age</th><th class="factor" title="Odds-ratio contribution of this row's 7d growth vs the peer mean">×growth</th><th data-k="implied">Implied value</th>
         <th data-k="verdict">Verdict</th><th data-k="net">Net / hour</th>
       </tr></thead>
       <tbody id="rows"></tbody>
+    </table>
+    <p class="note" id="factorNote"></p>
     </table>
     <p class="note" id="boardNote"></p>
   </section>
@@ -84,6 +89,8 @@
     <div id="modelOddsTable"></div>
     <h3>Range honesty and bootstrap</h3>
     <div id="modelRangeTable"></div>
+    <h3>Nested term-selection check</h3>
+    <div id="modelNestedTable"></div>
     <p class="note">Nothing here is a prediction that a token will launch, or when. The implied value is what the token would be worth if the protocol's record stayed as it is — priced the way the market already prices tokens that trade, and weighted by how often protocols of that age record a token.</p>
   </section>
   <footer class="foot">
